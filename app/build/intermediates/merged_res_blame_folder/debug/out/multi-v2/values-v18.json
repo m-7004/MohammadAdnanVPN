@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.mohammadadnan.vpn.app-mergeDebugResources-29:/values-v18/values-v18.xml",
+            "map": [
+                {
+                    "source": "/data/data/com.termux/files/home/.gradle/caches/9.5.1/transforms/d2b40f7d6554ea6c5d5be6d5b438ecd0/transformed/appcompat-1.6.1/res/values-v18/values-v18.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "48",
+                        "endOffsets": "99"
+                    }
+                }
+            ]
+        }
+    ]
+}

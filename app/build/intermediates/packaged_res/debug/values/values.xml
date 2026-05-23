@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_connect">#9B59B6</color>
+    <color name="red_disconnect">#C0392B</color>
+    <string name="app_name">Mohammad Adnan</string>
+    <style name="Theme.MohammadAdnanVPN" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#9B59B6</item>
+        <item name="colorPrimaryVariant">#7D3C98</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">#000000</item>
+    </style>
+</resources>

@@ -1,0 +1,11 @@
+R_DEF: Internal format may change without notice
+local
+color purple_connect
+color red_disconnect
+drawable ic_bg
+drawable ic_logo
+id btnConnect
+layout activity_main
+mipmap ic_launcher
+string app_name
+style Theme.MohammadAdnanVPN

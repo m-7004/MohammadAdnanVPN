@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#000000"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Mohammad Adnan"
+        android:textColor="#FFFFFF"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:gravity="end"
+        android:padding="8dp"/>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#111111"
+        android:padding="16dp"
+        android:layout_marginTop="12dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="end">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VLess \u2022 TCP \u2022 Direct -> Target"
+                android:textColor="#888888"
+                android:textSize="13sp"/>
+        </LinearLayout>
+
+        <View android:layout_width="match_parent" android:layout_height="1dp"
+            android:background="#333333" android:layout_marginTop="10dp" android:layout_marginBottom="10dp"/>
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="target server" android:textColor="#666666" android:textSize="12sp" android:gravity="end"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="51.254.130.47:80" android:textColor="#FFFFFF" android:textSize="16sp" android:gravity="end"/>
+
+        <View android:layout_width="match_parent" android:layout_height="1dp"
+            android:background="#333333" android:layout_marginTop="10dp" android:layout_marginBottom="10dp"/>
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="uuid" android:textColor="#666666" android:textSize="12sp" android:gravity="end"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="free.facebook.com" android:textColor="#FFFFFF" android:textSize="16sp" android:gravity="end"/>
+
+        <View android:layout_width="match_parent" android:layout_height="1dp"
+            android:background="#333333" android:layout_marginTop="10dp" android:layout_marginBottom="10dp"/>
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="payload" android:textColor="#666666" android:textSize="12sp" android:gravity="end"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="HTTP/78 2026" android:textColor="#FFFFFF" android:textSize="16sp" android:gravity="end"/>
+
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btnConnect"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginTop="24dp"
+        android:text="CONNECT"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:backgroundTint="@color/purple_connect"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="Version 1.0 \u2014 Mohammad Adnan VPN"
+        android:textColor="#444444"
+        android:textSize="11sp"
+        android:gravity="center"/>
+
+</LinearLayout>
