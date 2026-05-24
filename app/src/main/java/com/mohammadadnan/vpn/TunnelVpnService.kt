@@ -4,7 +4,6 @@ import android.app.*
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
-import android.os.Environment
 import android.os.ParcelFileDescriptor
 import java.io.*
 import kotlin.concurrent.thread
@@ -14,20 +13,18 @@ class TunnelVpnService : VpnService() {
     private var vpnFd: ParcelFileDescriptor? = null
     private var tun2socksProcess: Process? = null
     private var running = false
-    private val logFile by lazy { 
-        File(Environment.getExternalStorageDirectory(), "vpn_log.txt")
+    private val logFile by lazy {
+        File("/sdcard/Download/vpn_log.txt")
     }
 
     private fun log(msg: String) {
-        try {
-            logFile.appendText("[${System.currentTimeMillis()}] $msg\n")
-            android.util.Log.d("TunnelVPN", msg)
-        } catch (e: Exception) {}
+        try { logFile.appendText("[${System.currentTimeMillis()}] $msg\n") } catch (e: Exception) {}
+        android.util.Log.d("TunnelVPN", msg)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stop(); return START_NOT_STICKY }
-        logFile.delete()
+        try { logFile.delete() } catch (e: Exception) {}
         thread {
             try { start() }
             catch (e: Exception) { log("CRASH: ${e.message}\n${e.stackTraceToString()}") }
@@ -63,10 +60,9 @@ class TunnelVpnService : VpnService() {
         val server = prefs.getString("server", "51.254.130.47")!!
         val port = prefs.getString("port", "80")!!.toIntOrNull() ?: 80
 
-        log("Starting VPN to $server:$port")
+        log("Starting VPN $server:$port")
         showNotification("$server:$port")
 
-        log("Building VPN interface...")
         vpnFd = Builder()
             .setMtu(1500)
             .addAddress("10.0.0.2", 24)
@@ -76,11 +72,11 @@ class TunnelVpnService : VpnService() {
             .setSession("Mohammad Adnan VPN")
             .establish()
 
-        if (vpnFd == null) { log("ERROR: vpnFd is null!"); return }
+        if (vpnFd == null) { log("ERROR: vpnFd null"); return }
         log("VPN fd=${vpnFd!!.fd}")
 
         val tun2socks = extractBinary("tun2socks")
-        log("Starting tun2socks fd=${vpnFd!!.fd}")
+        log("Starting tun2socks...")
 
         tun2socksProcess = ProcessBuilder(
             tun2socks.absolutePath,
@@ -90,12 +86,9 @@ class TunnelVpnService : VpnService() {
         ).redirectErrorStream(true).start()
 
         thread {
-            tun2socksProcess!!.inputStream.bufferedReader().forEachLine {
-                log("tun2socks: $it")
-            }
-            log("tun2socks ended with code: ${tun2socksProcess?.exitValue()}")
+            tun2socksProcess!!.inputStream.bufferedReader().forEachLine { log("t2s: $it") }
+            log("tun2socks exit: ${try { tun2socksProcess?.exitValue() } catch(e:Exception){ "running" }}")
         }
-
         log("Done")
     }
 
