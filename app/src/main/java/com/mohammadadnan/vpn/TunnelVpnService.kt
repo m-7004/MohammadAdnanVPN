@@ -6,14 +6,16 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import java.io.*
+import java.net.InetSocketAddress
+import java.net.Socket
 import kotlin.concurrent.thread
 
 class TunnelVpnService : VpnService() {
 
     private var vpnFd: ParcelFileDescriptor? = null
-    private var xrayProcess: Process? = null
     private var tun2socksProcess: Process? = null
     private var running = false
+    private var localProxyThread: Thread? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stop(); return START_NOT_STICKY }
@@ -42,66 +44,122 @@ class TunnelVpnService : VpnService() {
         return f
     }
 
+    private fun pipe(input: InputStream, output: OutputStream) {
+        try {
+            val buf = ByteArray(8192)
+            while (running) {
+                val n = input.read(buf)
+                if (n < 0) break
+                output.write(buf, 0, n)
+                output.flush()
+            }
+        } catch (e: Exception) {}
+    }
+
+    private fun startLocalSocks(serverHost: String, serverPort: Int, payload: String) {
+        val serverSocket = java.net.ServerSocket()
+        serverSocket.reuseAddress = true
+        serverSocket.bind(InetSocketAddress("127.0.0.1", 10808))
+
+        localProxyThread = thread {
+            while (running) {
+                try {
+                    val client = serverSocket.accept()
+                    thread {
+                        try {
+                            // قراءة SOCKS5 handshake
+                            val inp = client.getInputStream()
+                            val out = client.getOutputStream()
+
+                            // SOCKS5 greeting
+                            val greeting = ByteArray(2)
+                            inp.read(greeting)
+                            val nMethods = greeting[1].toInt() and 0xFF
+                            inp.read(ByteArray(nMethods))
+                            out.write(byteArrayOf(0x05, 0x00))
+
+                            // SOCKS5 request
+                            val req = ByteArray(4)
+                            inp.read(req)
+                            val addrType = req[3].toInt()
+                            val targetHost: String
+                            when (addrType) {
+                                0x01 -> {
+                                    val ip = ByteArray(4); inp.read(ip)
+                                    targetHost = ip.joinToString(".") { (it.toInt() and 0xFF).toString() }
+                                }
+                                0x03 -> {
+                                    val len = inp.read()
+                                    val host = ByteArray(len); inp.read(host)
+                                    targetHost = String(host)
+                                }
+                                else -> { client.close(); return@thread }
+                            }
+                            val portBytes = ByteArray(2); inp.read(portBytes)
+                            val targetPort = ((portBytes[0].toInt() and 0xFF) shl 8) or (portBytes[1].toInt() and 0xFF)
+
+                            // الاتصال بالسيرفر
+                            val remote = Socket()
+                            protect(remote)
+                            remote.connect(InetSocketAddress(serverHost, serverPort), 10000)
+
+                            val rOut = remote.getOutputStream()
+                            val rIn = remote.getInputStream()
+
+                            // إرسال البايلود
+                            val payloadBytes = payload.toByteArray()
+                            rOut.write(payloadBytes)
+                            rOut.write("\r\n\r\n".toByteArray())
+                            rOut.flush()
+
+                            // قراءة رد 200 OK
+                            val response = ByteArray(1024)
+                            val rLen = rIn.read(response)
+                            val responseStr = String(response, 0, rLen)
+
+                            if (!responseStr.contains("200")) {
+                                client.close(); remote.close(); return@thread
+                            }
+
+                            // إرسال CONNECT للـ xray
+                            val connectReq = "CONNECT $targetHost:$targetPort HTTP/1.1\r\nHost: $targetHost:$targetPort\r\n\r\n"
+                            rOut.write(connectReq.toByteArray())
+                            rOut.flush()
+
+                            // قراءة رد xray
+                            val xrayResp = ByteArray(1024)
+                            val xLen = rIn.read(xrayResp)
+
+                            // رد SOCKS5 نجاح
+                            out.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                            out.flush()
+
+                            // pipe في الاتجاهين
+                            thread { pipe(inp, rOut) }
+                            pipe(rIn, out)
+
+                        } catch (e: Exception) {
+                            try { client.close() } catch (ex: Exception) {}
+                        }
+                    }
+                } catch (e: Exception) {}
+            }
+        }
+    }
+
     private fun start() {
         running = true
         val prefs = getSharedPreferences("vpn_config", MODE_PRIVATE)
         val server = prefs.getString("server", "51.254.130.47")!!
         val port = prefs.getString("port", "80")!!.toIntOrNull() ?: 80
-        val uuid = prefs.getString("uuid", "free.facebook.com")!!
-        val payload = prefs.getString("payload", "")!!
+        val payload = prefs.getString("payload", "HTTP/78 2026")!!
 
         showNotification("$server:$port")
 
-        val payloadLines = payload.replace("\\r\\n", "\r\n").split("\r\n")
-        val hostHeader = payloadLines.find { it.startsWith("Host:") }?.substringAfter("Host:")?.trim() ?: "proxy.exhxx.com:8080"
+        // تشغيل local SOCKS5 proxy
+        startLocalSocks(server, port, payload)
 
-        val config = """
-{
-  "log": {"loglevel": "warning"},
-  "inbounds": [
-    {"listen": "127.0.0.1", "port": 10808, "protocol": "socks",
-     "settings": {"auth": "noauth", "udp": true, "userLevel": 8}}
-  ],
-  "outbounds": [
-    {
-      "tag": "proxy",
-      "protocol": "vless",
-      "settings": {
-        "vnext": [{"address": "$server", "port": $port,
-          "users": [{"id": "$uuid", "encryption": "none", "level": 8}]}]
-      },
-      "streamSettings": {
-        "network": "tcp", "security": "none",
-        "tcpSettings": {
-          "header": {
-            "type": "http",
-            "request": {
-              "version": "1.1", "method": "GET", "path": ["/"],
-              "headers": {
-                "Host": ["$hostHeader"],
-                "Connection": ["Keep-Alive"],
-                "Proxy-Connection": ["Keep-Alive"]
-              }
-            }
-          }
-        }
-      },
-      "mux": {"enabled": true, "concurrency": 8}
-    },
-    {"tag": "direct", "protocol": "freedom", "settings": {}}
-  ],
-  "routing": {"rules": [{"type": "field", "ip": ["127.0.0.1"], "outboundTag": "direct"}]}
-}""".trimIndent()
-
-        val configFile = File(filesDir, "config.json")
-        configFile.writeText(config)
-
-        // تشغيل xray
-        val xray = extractBinary("xray")
-        xrayProcess = ProcessBuilder(xray.absolutePath, "run", "-c", configFile.absolutePath)
-            .redirectErrorStream(true).start()
-
-        Thread.sleep(2000)
+        Thread.sleep(1000)
 
         // إنشاء VPN interface
         vpnFd = Builder()
@@ -122,12 +180,8 @@ class TunnelVpnService : VpnService() {
             "-loglevel", "warning"
         ).redirectErrorStream(true).start()
 
-        // حماية socket الخاص بـ tun2socks
         thread {
-            try {
-                val log = tun2socksProcess!!.inputStream.bufferedReader()
-                while (running) { log.readLine() ?: break }
-            } catch (e: Exception) {}
+            tun2socksProcess!!.inputStream.bufferedReader().forEachLine { }
         }
     }
 
@@ -135,8 +189,6 @@ class TunnelVpnService : VpnService() {
         running = false
         tun2socksProcess?.destroy()
         tun2socksProcess = null
-        xrayProcess?.destroy()
-        xrayProcess = null
         vpnFd?.close()
         vpnFd = null
         stopForeground(true)
