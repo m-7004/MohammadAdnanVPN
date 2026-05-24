@@ -4,10 +4,9 @@ import android.app.*
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
+import android.os.Environment
 import android.os.ParcelFileDescriptor
 import java.io.*
-import java.net.InetSocketAddress
-import java.net.Socket
 import kotlin.concurrent.thread
 
 class TunnelVpnService : VpnService() {
@@ -15,7 +14,9 @@ class TunnelVpnService : VpnService() {
     private var vpnFd: ParcelFileDescriptor? = null
     private var tun2socksProcess: Process? = null
     private var running = false
-    private val logFile by lazy { File(filesDir, "vpn_log.txt") }
+    private val logFile by lazy { 
+        File(Environment.getExternalStorageDirectory(), "vpn_log.txt")
+    }
 
     private fun log(msg: String) {
         try {
@@ -27,8 +28,8 @@ class TunnelVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stop(); return START_NOT_STICKY }
         logFile.delete()
-        thread { 
-            try { start() } 
+        thread {
+            try { start() }
             catch (e: Exception) { log("CRASH: ${e.message}\n${e.stackTraceToString()}") }
         }
         return START_STICKY
@@ -75,16 +76,12 @@ class TunnelVpnService : VpnService() {
             .setSession("Mohammad Adnan VPN")
             .establish()
 
-        if (vpnFd == null) {
-            log("ERROR: vpnFd is null!")
-            return
-        }
-        log("VPN interface created, fd=${vpnFd!!.fd}")
+        if (vpnFd == null) { log("ERROR: vpnFd is null!"); return }
+        log("VPN fd=${vpnFd!!.fd}")
 
-        log("Extracting tun2socks...")
         val tun2socks = extractBinary("tun2socks")
+        log("Starting tun2socks fd=${vpnFd!!.fd}")
 
-        log("Starting tun2socks...")
         tun2socksProcess = ProcessBuilder(
             tun2socks.absolutePath,
             "-device", "fd://${vpnFd!!.fd}",
@@ -92,15 +89,14 @@ class TunnelVpnService : VpnService() {
             "-loglevel", "info"
         ).redirectErrorStream(true).start()
 
-        log("tun2socks started, reading output...")
         thread {
-            tun2socksProcess!!.inputStream.bufferedReader().forEachLine { 
+            tun2socksProcess!!.inputStream.bufferedReader().forEachLine {
                 log("tun2socks: $it")
             }
-            log("tun2socks process ended")
+            log("tun2socks ended with code: ${tun2socksProcess?.exitValue()}")
         }
 
-        log("VPN started successfully")
+        log("Done")
     }
 
     private fun stop() {
