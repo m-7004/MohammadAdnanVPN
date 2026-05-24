@@ -8,7 +8,6 @@ import android.os.ParcelFileDescriptor
 import java.io.*
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.nio.ByteBuffer
 import kotlin.concurrent.thread
 
 class TunnelVpnService : VpnService() {
@@ -55,7 +54,25 @@ class TunnelVpnService : VpnService() {
                 dst.write(buf, 0, n)
                 dst.flush()
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) { log("pipe ended: ${e.message}") }
+    }
+
+    private fun readResponse(inp: InputStream): String {
+        val sb = StringBuilder()
+        val buf = ByteArray(1)
+        var timeout = 5000
+        while (timeout > 0) {
+            if (inp.available() > 0) {
+                val n = inp.read(buf)
+                if (n < 0) break
+                sb.append(buf[0].toChar())
+                if (sb.endsWith("\r\n\r\n")) break
+            } else {
+                Thread.sleep(10)
+                timeout -= 10
+            }
+        }
+        return sb.toString()
     }
 
     private fun connectToServer(server: String, port: Int, payload: String): Socket? {
@@ -63,27 +80,28 @@ class TunnelVpnService : VpnService() {
             val sock = Socket()
             protect(sock)
             sock.connect(InetSocketAddress(server, port), 10000)
-            sock.soTimeout = 0
+            sock.soTimeout = 5000
 
             val out = sock.getOutputStream()
             val inp = sock.getInputStream()
 
-            // إرسال البايلود
             out.write((payload + "\r\n\r\n").toByteArray())
             out.flush()
-            log("Payload sent")
+            log("Payload sent: $payload")
 
-            // قراءة رد 200 OK
-            val buf = ByteArray(1024)
-            val n = inp.read(buf)
-            val response = String(buf, 0, n)
-            log("Server response: $response")
+            val response = readResponse(inp)
+            log("Server response: '$response'")
+
+            sock.soTimeout = 0
 
             if (response.contains("200")) {
                 log("Tunnel established!")
                 sock
+            } else if (response.isEmpty()) {
+                log("Empty response - trying as tunnel anyway")
+                sock
             } else {
-                log("Bad response, closing")
+                log("Bad response")
                 sock.close()
                 null
             }
@@ -100,7 +118,7 @@ class TunnelVpnService : VpnService() {
         val port = prefs.getString("port", "80")!!.toIntOrNull() ?: 80
         val payload = prefs.getString("payload", "HTTP/78 2026")!!
 
-        log("Starting VPN $server:$port")
+        log("Starting VPN $server:$port payload=$payload")
         showNotification("$server:$port")
 
         vpnFd = Builder()
@@ -123,14 +141,12 @@ class TunnelVpnService : VpnService() {
         val sockIn = sock.getInputStream()
         val sockOut = sock.getOutputStream()
 
-        log("Starting tunnel pipes")
+        log("Tunnel running!")
 
-        // VPN → Server
         thread { pipe(vpnIn, sockOut) }
-        // Server → VPN
-        thread { pipe(sockIn, vpnOut) }
+        pipe(sockIn, vpnOut)
 
-        log("Tunnel running")
+        log("Tunnel ended")
     }
 
     private fun stop() {
