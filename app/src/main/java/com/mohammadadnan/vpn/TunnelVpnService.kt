@@ -6,19 +6,18 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import java.io.*
-import java.net.InetSocketAddress
-import java.net.Socket
 import kotlin.concurrent.thread
 
 class TunnelVpnService : VpnService() {
 
     private var vpnFd: ParcelFileDescriptor? = null
     private var xrayProcess: Process? = null
+    private var tun2socksProcess: Process? = null
     private var running = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stop(); return START_NOT_STICKY }
-        start()
+        thread { start() }
         return START_STICKY
     }
 
@@ -38,9 +37,7 @@ class TunnelVpnService : VpnService() {
 
     private fun extractBinary(name: String): File {
         val f = File(filesDir, name)
-        if (!f.exists() || f.length() < 1000) {
-            assets.open(name).use { i -> FileOutputStream(f).use { o -> i.copyTo(o) } }
-        }
+        assets.open(name).use { i -> FileOutputStream(f).use { o -> i.copyTo(o) } }
         f.setExecutable(true)
         return f
     }
@@ -51,7 +48,7 @@ class TunnelVpnService : VpnService() {
         val server = prefs.getString("server", "51.254.130.47")!!
         val port = prefs.getString("port", "80")!!.toIntOrNull() ?: 80
         val uuid = prefs.getString("uuid", "free.facebook.com")!!
-        val payload = prefs.getString("payload", "HTTP/78 2026 HTTP/1.1 300 ok\r\nHost: proxy.exhxx.com:8080\r\nConnection: Keep-Alive\r\nProxy-Connection: Keep-Alive")!!
+        val payload = prefs.getString("payload", "")!!
 
         showNotification("$server:$port")
 
@@ -63,9 +60,7 @@ class TunnelVpnService : VpnService() {
   "log": {"loglevel": "warning"},
   "inbounds": [
     {"listen": "127.0.0.1", "port": 10808, "protocol": "socks",
-     "settings": {"auth": "noauth", "udp": true, "userLevel": 8}},
-    {"listen": "127.0.0.1", "port": 10809, "protocol": "http",
-     "settings": {"userLevel": 8}}
+     "settings": {"auth": "noauth", "udp": true, "userLevel": 8}}
   ],
   "outbounds": [
     {
@@ -101,16 +96,14 @@ class TunnelVpnService : VpnService() {
         val configFile = File(filesDir, "config.json")
         configFile.writeText(config)
 
-        thread {
-            try {
-                val xray = extractBinary("xray")
-                xrayProcess = ProcessBuilder(xray.absolutePath, "run", "-c", configFile.absolutePath)
-                    .redirectErrorStream(true).start()
-            } catch (e: Exception) { e.printStackTrace() }
-        }
+        // تشغيل xray
+        val xray = extractBinary("xray")
+        xrayProcess = ProcessBuilder(xray.absolutePath, "run", "-c", configFile.absolutePath)
+            .redirectErrorStream(true).start()
 
         Thread.sleep(2000)
 
+        // إنشاء VPN interface
         vpnFd = Builder()
             .setMtu(1500)
             .addAddress("10.0.0.2", 24)
@@ -118,31 +111,30 @@ class TunnelVpnService : VpnService() {
             .addDnsServer("1.1.1.1")
             .addRoute("0.0.0.0", 0)
             .setSession("Mohammad Adnan VPN")
-            .establish()
+            .establish() ?: return
 
-        thread { forwardViaSocks() }
-    }
+        // تشغيل tun2socks
+        val tun2socks = extractBinary("tun2socks")
+        tun2socksProcess = ProcessBuilder(
+            tun2socks.absolutePath,
+            "-device", "fd://${vpnFd!!.fd}",
+            "-proxy", "socks5://127.0.0.1:10808",
+            "-loglevel", "warning"
+        ).redirectErrorStream(true).start()
 
-    private fun forwardViaSocks() {
-        val vpn = vpnFd ?: return
-        val vpnIn = FileInputStream(vpn.fileDescriptor)
-        val vpnOut = FileOutputStream(vpn.fileDescriptor)
-        val buf = ByteArray(4096)
-        try {
-            val sock = Socket()
-            protect(sock)
-            sock.connect(InetSocketAddress("127.0.0.1", 10808), 5000)
-            val sockIn = sock.getInputStream()
-            val sockOut = sock.getOutputStream()
-            thread {
-                try { while (running) { val l = sockIn.read(buf); if (l > 0) vpnOut.write(buf, 0, l) } } catch (e: Exception) {}
-            }
-            while (running) { val l = vpnIn.read(buf); if (l > 0) { sockOut.write(buf, 0, l); sockOut.flush() } }
-        } catch (e: Exception) { e.printStackTrace() }
+        // حماية socket الخاص بـ tun2socks
+        thread {
+            try {
+                val log = tun2socksProcess!!.inputStream.bufferedReader()
+                while (running) { log.readLine() ?: break }
+            } catch (e: Exception) {}
+        }
     }
 
     private fun stop() {
         running = false
+        tun2socksProcess?.destroy()
+        tun2socksProcess = null
         xrayProcess?.destroy()
         xrayProcess = null
         vpnFd?.close()
