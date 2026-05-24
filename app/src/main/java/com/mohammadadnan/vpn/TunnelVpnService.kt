@@ -13,9 +13,7 @@ class TunnelVpnService : VpnService() {
     private var vpnFd: ParcelFileDescriptor? = null
     private var tun2socksProcess: Process? = null
     private var running = false
-    private val logFile by lazy {
-        File("/sdcard/Download/vpn_log.txt")
-    }
+    private val logFile by lazy { File("/sdcard/Download/vpn_log.txt") }
 
     private fun log(msg: String) {
         try { logFile.appendText("[${System.currentTimeMillis()}] $msg\n") } catch (e: Exception) {}
@@ -47,10 +45,11 @@ class TunnelVpnService : VpnService() {
     }
 
     private fun extractBinary(name: String): File {
-        val f = File(filesDir, name)
+        val dir = codeCacheDir
+        val f = File(dir, name)
         assets.open(name).use { i -> FileOutputStream(f).use { o -> i.copyTo(o) } }
-        f.setExecutable(true)
-        log("Extracted $name: ${f.length()} bytes")
+        f.setExecutable(true, false)
+        log("Extracted $name to ${f.absolutePath} size=${f.length()}")
         return f
     }
 
@@ -76,7 +75,7 @@ class TunnelVpnService : VpnService() {
         log("VPN fd=${vpnFd!!.fd}")
 
         val tun2socks = extractBinary("tun2socks")
-        log("Starting tun2socks...")
+        log("Starting tun2socks from ${tun2socks.absolutePath}")
 
         tun2socksProcess = ProcessBuilder(
             tun2socks.absolutePath,
@@ -87,7 +86,7 @@ class TunnelVpnService : VpnService() {
 
         thread {
             tun2socksProcess!!.inputStream.bufferedReader().forEachLine { log("t2s: $it") }
-            log("tun2socks exit: ${try { tun2socksProcess?.exitValue() } catch(e:Exception){ "running" }}")
+            log("tun2socks exit: ${try { tun2socksProcess?.exitValue() } catch(e:Exception){ "?" }}")
         }
         log("Done")
     }
