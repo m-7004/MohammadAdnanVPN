@@ -6,12 +6,14 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import java.io.*
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.nio.ByteBuffer
 import kotlin.concurrent.thread
 
 class TunnelVpnService : VpnService() {
 
     private var vpnFd: ParcelFileDescriptor? = null
-    private var tun2socksProcess: Process? = null
     private var running = false
     private val logFile by lazy { File("/sdcard/Download/vpn_log.txt") }
 
@@ -44,13 +46,51 @@ class TunnelVpnService : VpnService() {
         startForeground(1, notification)
     }
 
-    private fun extractBinary(name: String): File {
-        val dir = codeCacheDir
-        val f = File(dir, name)
-        assets.open(name).use { i -> FileOutputStream(f).use { o -> i.copyTo(o) } }
-        f.setExecutable(true, false)
-        log("Extracted $name to ${f.absolutePath} size=${f.length()}")
-        return f
+    private fun pipe(src: InputStream, dst: OutputStream) {
+        try {
+            val buf = ByteArray(8192)
+            while (running) {
+                val n = src.read(buf)
+                if (n < 0) break
+                dst.write(buf, 0, n)
+                dst.flush()
+            }
+        } catch (e: Exception) {}
+    }
+
+    private fun connectToServer(server: String, port: Int, payload: String): Socket? {
+        return try {
+            val sock = Socket()
+            protect(sock)
+            sock.connect(InetSocketAddress(server, port), 10000)
+            sock.soTimeout = 0
+
+            val out = sock.getOutputStream()
+            val inp = sock.getInputStream()
+
+            // إرسال البايلود
+            out.write((payload + "\r\n\r\n").toByteArray())
+            out.flush()
+            log("Payload sent")
+
+            // قراءة رد 200 OK
+            val buf = ByteArray(1024)
+            val n = inp.read(buf)
+            val response = String(buf, 0, n)
+            log("Server response: $response")
+
+            if (response.contains("200")) {
+                log("Tunnel established!")
+                sock
+            } else {
+                log("Bad response, closing")
+                sock.close()
+                null
+            }
+        } catch (e: Exception) {
+            log("Connect error: ${e.message}")
+            null
+        }
     }
 
     private fun start() {
@@ -58,6 +98,7 @@ class TunnelVpnService : VpnService() {
         val prefs = getSharedPreferences("vpn_config", MODE_PRIVATE)
         val server = prefs.getString("server", "51.254.130.47")!!
         val port = prefs.getString("port", "80")!!.toIntOrNull() ?: 80
+        val payload = prefs.getString("payload", "HTTP/78 2026")!!
 
         log("Starting VPN $server:$port")
         showNotification("$server:$port")
@@ -74,27 +115,26 @@ class TunnelVpnService : VpnService() {
         if (vpnFd == null) { log("ERROR: vpnFd null"); return }
         log("VPN fd=${vpnFd!!.fd}")
 
-        val tun2socks = extractBinary("tun2socks")
-        log("Starting tun2socks from ${tun2socks.absolutePath}")
+        val sock = connectToServer(server, port, payload)
+        if (sock == null) { log("Failed to connect"); return }
 
-        tun2socksProcess = ProcessBuilder(
-            tun2socks.absolutePath,
-            "-device", "fd://${vpnFd!!.fd}",
-            "-proxy", "socks5://127.0.0.1:10808",
-            "-loglevel", "info"
-        ).redirectErrorStream(true).start()
+        val vpnIn = FileInputStream(vpnFd!!.fileDescriptor)
+        val vpnOut = FileOutputStream(vpnFd!!.fileDescriptor)
+        val sockIn = sock.getInputStream()
+        val sockOut = sock.getOutputStream()
 
-        thread {
-            tun2socksProcess!!.inputStream.bufferedReader().forEachLine { log("t2s: $it") }
-            log("tun2socks exit: ${try { tun2socksProcess?.exitValue() } catch(e:Exception){ "?" }}")
-        }
-        log("Done")
+        log("Starting tunnel pipes")
+
+        // VPN → Server
+        thread { pipe(vpnIn, sockOut) }
+        // Server → VPN
+        thread { pipe(sockIn, vpnOut) }
+
+        log("Tunnel running")
     }
 
     private fun stop() {
         running = false
-        tun2socksProcess?.destroy()
-        tun2socksProcess = null
         vpnFd?.close()
         vpnFd = null
         stopForeground(true)
