@@ -18,53 +18,80 @@ class TunnelVpnService : VpnService() {
         return START_STICKY
     }
 
+    private fun extractXray(): File {
+        val xrayFile = File(filesDir, "xray")
+        if (!xrayFile.exists()) {
+            assets.open("xray").use { input ->
+                FileOutputStream(xrayFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
+        xrayFile.setExecutable(true)
+        return xrayFile
+    }
+
     private fun start() {
-        // كتابة config لـ Xray
         val config = """
 {
-  "inbounds": [{
-    "port": 10808,
-    "protocol": "socks",
-    "settings": { "auth": "noauth", "udp": true }
-  }],
-  "outbounds": [{
-    "protocol": "vless",
-    "settings": {
-      "vnext": [{
-        "address": "51.254.130.47",
-        "port": 80,
-        "users": [{
-          "id": "free.facebook.com",
-          "encryption": "none"
-        }]
-      }]
+  "log": { "loglevel": "none" },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": { "auth": "noauth", "udp": true, "userLevel": 8 }
     },
-    "streamSettings": {
-      "network": "tcp",
-      "tcpSettings": {
-        "header": {
-          "type": "http",
-          "request": {
-            "version": "1.1",
-            "method": "GET",
-            "path": ["/"],
-            "headers": {
-              "Host": ["free.facebook.com"],
-              "Upgrade": ["websocket"],
-              "X-Payload": ["HTTP/78 2026"]
+    {
+      "listen": "127.0.0.1",
+      "port": 10809,
+      "protocol": "http",
+      "settings": { "userLevel": 8 }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [{
+          "address": "51.254.130.47",
+          "port": 80,
+          "users": [{
+            "id": "free.facebook.com",
+            "encryption": "none",
+            "flow": "",
+            "level": 8
+          }]
+        }]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none",
+        "tcpSettings": {
+          "header": {
+            "type": "http",
+            "request": {
+              "version": "1.1",
+              "method": "GET",
+              "path": ["/"],
+              "headers": {
+                "Host": ["proxy.exhxx.com:8080"],
+                "Connection": ["Keep-Alive"],
+                "Proxy-Connection": ["Keep-Alive"]
+              }
             }
           }
         }
-      }
+      },
+      "mux": { "enabled": true, "concurrency": 8 }
     }
-  }]
+  ]
 }
         """.trimIndent()
 
-        val configFile = File(filesDir, "xray_config.json")
+        val configFile = File(filesDir, "config.json")
         configFile.writeText(config)
 
-        // تشغيل VPN interface
         vpnFd = Builder()
             .setMtu(1500)
             .addAddress("10.0.0.2", 24)
@@ -74,14 +101,15 @@ class TunnelVpnService : VpnService() {
             .setSession("Mohammad Adnan VPN")
             .establish()
 
-        // تشغيل Xray
-        val xrayFile = File(filesDir, "xray")
-        if (xrayFile.exists()) {
-            xrayFile.setExecutable(true)
-            thread {
-                xrayProcess = ProcessBuilder(xrayFile.absolutePath, "run", "-c", configFile.absolutePath)
+        thread {
+            try {
+                val xray = extractXray()
+                xrayProcess = ProcessBuilder(xray.absolutePath, "run", "-c", configFile.absolutePath)
                     .redirectErrorStream(true)
                     .start()
+                xrayProcess?.waitFor()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
