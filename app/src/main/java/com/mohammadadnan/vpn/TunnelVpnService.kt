@@ -3,24 +3,14 @@ package com.mohammadadnan.vpn
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
-import java.io.FileInputStream
+import java.io.File
 import java.io.FileOutputStream
-import java.net.InetSocketAddress
-import java.nio.ByteBuffer
-import java.nio.channels.SocketChannel
 import kotlin.concurrent.thread
 
 class TunnelVpnService : VpnService() {
 
-    companion object {
-        const val SERVER  = "51.254.130.47"
-        const val PORT    = 80
-        const val UUID    = "free.facebook.com"
-        const val PAYLOAD = "HTTP/78 2026"
-    }
-
     private var vpnFd: ParcelFileDescriptor? = null
-    private var running = false
+    private var xrayProcess: Process? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stop(); return START_NOT_STICKY }
@@ -29,6 +19,52 @@ class TunnelVpnService : VpnService() {
     }
 
     private fun start() {
+        // كتابة config لـ Xray
+        val config = """
+{
+  "inbounds": [{
+    "port": 10808,
+    "protocol": "socks",
+    "settings": { "auth": "noauth", "udp": true }
+  }],
+  "outbounds": [{
+    "protocol": "vless",
+    "settings": {
+      "vnext": [{
+        "address": "51.254.130.47",
+        "port": 80,
+        "users": [{
+          "id": "free.facebook.com",
+          "encryption": "none"
+        }]
+      }]
+    },
+    "streamSettings": {
+      "network": "tcp",
+      "tcpSettings": {
+        "header": {
+          "type": "http",
+          "request": {
+            "version": "1.1",
+            "method": "GET",
+            "path": ["/"],
+            "headers": {
+              "Host": ["free.facebook.com"],
+              "Upgrade": ["websocket"],
+              "X-Payload": ["HTTP/78 2026"]
+            }
+          }
+        }
+      }
+    }
+  }]
+}
+        """.trimIndent()
+
+        val configFile = File(filesDir, "xray_config.json")
+        configFile.writeText(config)
+
+        // تشغيل VPN interface
         vpnFd = Builder()
             .setMtu(1500)
             .addAddress("10.0.0.2", 24)
@@ -37,42 +73,22 @@ class TunnelVpnService : VpnService() {
             .addRoute("0.0.0.0", 0)
             .setSession("Mohammad Adnan VPN")
             .establish()
-        running = true
-        thread { tunnel() }
-    }
 
-    private fun tunnel() {
-        val fd = vpnFd ?: return
-        val input  = FileInputStream(fd.fileDescriptor)
-        val output = FileOutputStream(fd.fileDescriptor)
-        try {
-            val ch = SocketChannel.open()
-            protect(ch.socket())
-            ch.connect(InetSocketAddress(SERVER, PORT))
-
-            val handshake = "GET / HTTP/1.1\r\nHost: $UUID\r\n" +
-                "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
-                "X-Payload: $PAYLOAD\r\n\r\n"
-            ch.write(ByteBuffer.wrap(handshake.toByteArray()))
-
-            val buf  = ByteArray(32767)
-            val sBuf = ByteBuffer.allocate(32767)
-
-            while (running) {
-                val len = input.read(buf)
-                if (len > 0) ch.write(ByteBuffer.wrap(buf, 0, len))
-                sBuf.clear()
-                val sLen = ch.read(sBuf)
-                if (sLen > 0) output.write(sBuf.array(), 0, sLen)
+        // تشغيل Xray
+        val xrayFile = File(filesDir, "xray")
+        if (xrayFile.exists()) {
+            xrayFile.setExecutable(true)
+            thread {
+                xrayProcess = ProcessBuilder(xrayFile.absolutePath, "run", "-c", configFile.absolutePath)
+                    .redirectErrorStream(true)
+                    .start()
             }
-            ch.close()
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 
     private fun stop() {
-        running = false
+        xrayProcess?.destroy()
+        xrayProcess = null
         vpnFd?.close()
         vpnFd = null
         stopSelf()
